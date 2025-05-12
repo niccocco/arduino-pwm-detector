@@ -1,3 +1,4 @@
+#include <Arduino.h>
 /*Limiti minimi e massimi di frequenza e duty cycle*/
 #define MIN_FREQ                    (250)         /* Minimum frequency (in mHz) */
 #define MAX_FREQ                    (100000)      /* Maximum frequency (in mHz) */
@@ -113,7 +114,23 @@ void setup() {
 void loop() {
   /*NOTA: per minimizzare il jitter del riconoscitore di frequenza, questa funzione non dovrebbe  */
   /*mai ritornare ad Arduino ma realizzare un ciclo infinito                                      */
+  
+  // DFEINIZIONE VARIAIBLI UTILI, da spostare dove avrà più senso, ovvero non globalmente
+  
+  long lastRiseTime = 0; // variabile per il tempo dell'ultimo rising edge
+  long lastFallTime = 0; // variabile per il tempo dell'ultimo falling edge
+  long actualTime = 0;
+  
+  fsm state = UNCOUPLED; // inizializzo lo stato della Macchina a Stati
+  
+  bool actualPinState = LOW; //inizializzo il pin corrente
+  bool oldPinState = LOW;  //inizializzo il pin
 
+  while (1) {
+
+    actualTime = micros(); // acquisisco il tempo corrente in microsecondi
+
+  
   /*Acquisisco il tempo corrente (in us) e lo stato corrente dell'ingresso                        */
   /*A seconda dello stato della FSM effettuo una delle seguenti operazioni:                       */
   /*UNCOUPLED:  Se lo stato corrente dell'ingresso non è cambiato rispetto al precedente non      */
@@ -121,11 +138,44 @@ void loop() {
   /*            Se lo stato corrente è cambiato devo valutare se ho avuto un rising edge o un     */
   /*            falling edge. Sul falling edge devo controllare se il tempo dall'ultimo rising    */
   /*            edge (la larghezza d'impulso) è compreso fra TON_min e TON_max, se è vero allora  */
-  /*            ho avuto un TON valido, altrimenti ho un TON invalido. Se ho un rising edge       */
+  /*            ho avuto un TON valido, altrimenti ho un TON invalido. 
+                Se ho un rising edge       */
   /*            allora controllo se il tempo dall'ultimo rising edge (il periodo) è compreso fra  */
   /*            T_min e T_max, se è vero e il TON precedente era valido allora vado nello stato   */
   /*            COUPLING, altrimenti ho avuto un TON invalido. Infine, se ho avuto un rising      */
   /*            edge, aggiorno il tempo dell'ultimo rising edge                                   */
+
+    if (state == UNCOUPLED)
+    {
+      // controllo lo stato del pin di ingresso del pwm
+      actualPinState = digitalRead(INPUT_PIN);
+
+      // se lo stato del pin è cambiato, e lo stato attuale è HIGH
+      // OVVERO ho avuto un RISING EDGE
+      if ((actualPinState != oldPinState) && (actualPinState == HIGH)) 
+      {
+        if ((actualTime - lastRiseTime >= periodMin) && (actualTime - lastRiseTime <= periodMax))
+        {
+          // ho letto un periodo valido
+          state = COUPLING; // passo allo stato COUPLING
+        }
+        
+        lastRiseTime = actualTime; // aggiorno il tempo dell'ultimo rising edge
+      } 
+      // Check del falling edge
+      else if ((actualPinState != oldPinState) && (actualPinState == LOW)) 
+      {
+        //devo controllare se il tempo dall'ultimo rising edge (la larghezza d'impulso) è compreso fra TON_min e TON_max
+        if ((actualTime - lastRiseTime) >= tOnMin && (actualTime - lastRiseTime) <= tOnMax)
+        {
+          // ho avuto un TON valido
+          lastFallTime = actualTime; 
+          //state = UNCOUPLED; // rimango nello stato UNCOUPLED
+        }
+    }
+    
+
+
   /*COUPLING:   Se lo stato corrente dell'ingresso non è cambiato rispetto al precedente devo     */
   /*            controllare di non aver superato il valore massimo di TON (se lo stato corrente è */
   /*            alto) oppure il valore massimo di T (se è basso). Se ho passato uno dei due       */
@@ -152,6 +202,9 @@ void loop() {
   /*            periodo) è  compreso fra T_min e T_max, se non è vero ho avuto un TON invalido,   */
   /*            torno nello stato UNCOUPLED e spengo l'uscita. Infine, se ho avuto un rising      */
   /*            edge, aggiorno il tempo dell'ultimo rising edge                                   */
+
+
+  } // end while(1)
 }
 
 
