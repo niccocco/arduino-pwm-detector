@@ -65,7 +65,7 @@ void setup() {
   while (!SerialUSB) {
     ; /*wait for serial port to connect. Needed for native USB*/
   }
-
+  
   SerialUSB.println("Configuring Frequency Detector...");
   printFrequencyRange(false);
   bValid = 0;
@@ -97,7 +97,7 @@ void setup() {
       }
     }
   } while (bValid == 0);
-
+  
   configure();
   printConfig();
   SerialUSB.end();
@@ -115,6 +115,7 @@ void loop() {
   /*NOTA: per minimizzare il jitter del riconoscitore di frequenza, questa funzione non dovrebbe  */
   /*mai ritornare ad Arduino ma realizzare un ciclo infinito                                      */
   
+  //siamo il gruppo 10  
   // DFEINIZIONE VARIAIBLI UTILI, da spostare dove avrà più senso, ovvero non globalmente
   
   long lastRiseTime = 0; // variabile per il tempo dell'ultimo rising edge
@@ -128,7 +129,8 @@ void loop() {
 
   while (1) {
 
-    actualTime = micros(); // acquisisco il tempo corrente in microsecondi
+    actualTime = micros();                    // acquisisco il tempo corrente in microsecondi
+    actualPinState = digitalRead(INPUT_PIN);  // controllo lo stato del pin di ingresso del pwm
 
   
   /*Acquisisco il tempo corrente (in us) e lo stato corrente dell'ingresso                        */
@@ -147,9 +149,6 @@ void loop() {
 
     if (state == UNCOUPLED)
     {
-      // controllo lo stato del pin di ingresso del pwm
-      actualPinState = digitalRead(INPUT_PIN);
-
       // se lo stato del pin è cambiato, e lo stato attuale è HIGH
       // OVVERO ho avuto un RISING EDGE
       if ((actualPinState != oldPinState) && (actualPinState == HIGH)) 
@@ -161,6 +160,7 @@ void loop() {
         }
         
         lastRiseTime = actualTime; // aggiorno il tempo dell'ultimo rising edge
+        oldPinState = HIGH; // aggiorno lo stato del pin che dovrebb essere high
       } 
       // Check del falling edge
       else if ((actualPinState != oldPinState) && (actualPinState == LOW)) 
@@ -189,6 +189,54 @@ void loop() {
   /*            fra T_min e T_max, se è vero allora vado nello stato COUPLED e accendo l'uscita,  */
   /*            altrimenti ho avuto un TON invalido e torno nello stato UNCOUPLED. Infine, se ho  */
   /*            avuto un rising edge, aggiorno il tempo dell'ultimo rising edge                   */
+  if (state == COUPLING)
+  {
+    // controllo che lo stato del pin non sia cambiato
+    if (actualPinState == oldPinState)
+    {      
+      if (actualPinState == HIGH)
+      {
+        if (actualTime - lastFallTime >= t0nMax) // se supero il valore massimo ammissibile di TON
+        {
+          state = UNCOUPLED; // torno nello stato UNCOUPLED
+        } 
+        
+      } else { // se lo stato è LOW
+        if (actualTime - lastRiseTime >= periodMax) // se supero il valore massimo ammissibile di T
+        {
+          state = UNCOUPLED; // torno nello stato UNCOUPLED
+        }
+      }
+      
+    } else {
+      // se lo stato è cambiato, valuto se ho avuto un rising edge o un falling edge
+
+      // se ho avuto un falling edge
+      if (actualPinState == LOW)
+      {
+       if !(actualTime - lastRiseTime >= tOnMin && actualTime - lastRiseTime <= tOnMax) // se il tempo dall'ultimo rising edge è compreso fra TON_min e TON_max
+       {
+        state = UNCOUPLED; // torno nello stato UNCOUPLED perchè ho avuto un TON invalido
+       }
+      }
+      // se ho avuto un rising edge
+      else if (actualPinState == HIGH)
+      {
+        if (actualTime - lastRiseTime >= periodMin && actualTime - lastRiseTime <= periodMax) // se il tempo dall'ultimo rising edge è compreso fra T_min e T_max
+        {
+          state = COUPLED; // passo nello stato COUPLED
+          digitalWrite(OUTPUT_PIN, HIGH); // accendo l'uscita
+        }
+        else {
+          state = UNCOUPLED; // torno nello stato UNCOUPLED perchè ho avuto un TON invalido
+        }
+        
+      }
+      
+
+    }
+  }
+  
   /*COUPLED:    Se lo stato corrente dell'ingresso non è cambiato rispetto al precedente devo     */
   /*            controllare di non aver superato il valore massimo di TON (se lo stato corrente è */
   /*            alto) oppure il valore massimo di T (se è basso). Se ho passato uno dei due       */
