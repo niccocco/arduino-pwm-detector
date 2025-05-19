@@ -60,7 +60,7 @@ void setup() {
   int bValid;
   
   /*Initialize serial and wait for port to open*/
-  SerialUSB.begin(9600);
+  SerialUSB.begin(115200);
   SerialUSB.setTimeout(60000);
   while (!SerialUSB) {
     ; /*wait for serial port to connect. Needed for native USB*/
@@ -100,7 +100,30 @@ void setup() {
   
   configure();
   printConfig();
-  SerialUSB.end();
+  //SerialUSB.end();
+
+
+  pmc_set_writeprotect(false);               // Disattiva la protezione sui registri PMC
+  pmc_enable_periph_clk(ID_TC1);             // Abilita il clock al TC0 Channel 1 (TC1 corrisponde a TC0_CH1)
+
+  // Configura TC0, Channel 1 (TC1) in modalità waveform
+  TC_Configure(TC0, 1,
+               TC_CMR_WAVE |                 // Modalità Waveform
+               TC_CMR_WAVSEL_UP_RC |         // Conta fino a RC
+               TC_CMR_TCCLKS_TIMER_CLOCK4);  // Clock: MCK/128 = 656250Hz
+
+  TC_SetRC(TC0, 1, 656250);                  // Periodo 1Hz
+  TC_SetRA(TC0, 1, 328125);                  // 50% duty cycle
+
+  // Imposta il comportamento dell'uscita TIOA1 (HIGH a RA, LOW a RC)
+  TC0->TC_CHANNEL[1].TC_CMR |= TC_CMR_ACPA_SET | TC_CMR_ACPC_CLEAR;
+
+  TC_Start(TC0, 1);                          // Avvia il timer
+
+  // Configura pin 53 (PB14) per funzione periferica B (TIOA1)
+  PIOB->PIO_PDR |= PIO_PB14;                 // Disabilita PIO su PB14
+  PIOB->PIO_ABSR |= PIO_PB14;                // Seleziona periferica B per PB14
+
 }
 
 
@@ -118,20 +141,25 @@ void loop() {
   //siamo il gruppo 10  
   // DFEINIZIONE VARIAIBLI UTILI, da spostare dove avrà più senso, ovvero non globalmente
   
-  long lastRiseTime = 0; // variabile per il tempo dell'ultimo rising edge
-  long lastFallTime = 0; // variabile per il tempo dell'ultimo falling edge
-  long actualTime = 0;
+  unsigned long lastRiseTime = 0; // variabile per il tempo dell'ultimo rising edge
+  unsigned long lastFallTime = 0; // variabile per il tempo dell'ultimo falling edge
+  unsigned long actualTime = 0;
   
   fsm state = UNCOUPLED; // inizializzo lo stato della Macchina a Stati
   
   bool actualPinState = LOW; //inizializzo il pin corrente
   bool oldPinState = LOW;  //inizializzo il pin
 
+  bool stato_ton = LOW;
+
+  delay(1000);
+
   while (1) {
 
     actualTime = micros();                    // acquisisco il tempo corrente in microsecondi
     actualPinState = digitalRead(INPUT_PIN);  // controllo lo stato del pin di ingresso del pwm
-
+    //SerialUSB.println("actualPinState \t oldPinState \t actualTime \t lastFallTime \t lastRiseTime");
+    //SerialUSB.print("\t"); SerialUSB.print(actualPinState); SerialUSB.print(" ; \t\t"); SerialUSB.print(oldPinState); SerialUSB.print(" ; \t"); SerialUSB.print(actualTime); SerialUSB.print(" ; \t"); SerialUSB.print(lastFallTime); SerialUSB.print(" ; \t"); SerialUSB.print(lastRiseTime); SerialUSB.println(" ; ");
   
   /*Acquisisco il tempo corrente (in us) e lo stato corrente dell'ingresso                        */
   /*A seconda dello stato della FSM effettuo una delle seguenti operazioni:                       */
@@ -141,7 +169,7 @@ void loop() {
   /*            falling edge. Sul falling edge devo controllare se il tempo dall'ultimo rising    */
   /*            edge (la larghezza d'impulso) è compreso fra TON_min e TON_max, se è vero allora  */
   /*            ho avuto un TON valido, altrimenti ho un TON invalido. 
-                Se ho un rising edge       */
+  /*            Se ho un rising edge                                                              */
   /*            allora controllo se il tempo dall'ultimo rising edge (il periodo) è compreso fra  */
   /*            T_min e T_max, se è vero e il TON precedente era valido allora vado nello stato   */
   /*            COUPLING, altrimenti ho avuto un TON invalido. Infine, se ho avuto un rising      */
@@ -149,32 +177,46 @@ void loop() {
 
     if (state == UNCOUPLED)
     {
-      SerialUSB.println("[stato] UNCOUPLED");
       // se lo stato del pin è cambiato, e lo stato attuale è HIGH
       // OVVERO ho avuto un RISING EDGE
       if ((actualPinState != oldPinState) && (actualPinState == HIGH)) 
       {
+        SerialUSB.println("[stato] UNCOUPLED RINSING");
+        lastRiseTime = actualTime; // aggiorno il tempo dell'ultimo rising edge
+        oldPinState = actualPinState; // aggiorno lo stato del pin che dovrebb essere high
         if ((actualTime - lastRiseTime >= periodMin) && (actualTime - lastRiseTime <= periodMax))
         {
           // ho letto un periodo valido
+          SerialUSB.println("cambio stato in COUPLING");
           state = COUPLING; // passo allo stato COUPLING
+        } else {
+          stato_ton = false;
         }
+
+        lastRiseTime = actualTime; 
+
         
-        lastRiseTime = actualTime; // aggiorno il tempo dell'ultimo rising edge
-        oldPinState = HIGH; // aggiorno lo stato del pin che dovrebb essere high
       } 
       // Check del falling edge
       else if ((actualPinState != oldPinState) && (actualPinState == LOW)) 
       {
+        SerialUSB.println("[stato] UNCOUPLED FALLING");
+
         //devo controllare se il tempo dall'ultimo rising edge (la larghezza d'impulso) è compreso fra TON_min e TON_max
-        if ((actualTime - lastRiseTime) >= tOnMin && (actualTime - lastRiseTime) <= tOnMax)
+        if (((actualTime - lastRiseTime) >= tOnMin) && ((actualTime - lastRiseTime) <= tOnMax))
         {
+          SerialUSB.println("ho avuto TON valido");
           // ho avuto un TON valido
-          lastFallTime = actualTime; 
           //state = UNCOUPLED; // rimango nello stato UNCOUPLED
+          oldPinState = actualPinState; // aggiorno lo stato del pin che dovrebb essere high
+          stato_ton = true;
+        } else {
+          stato_ton = false;
         }
+          lastRiseTime = actualTime; 
+
     }
-    
+  }
 
 
   /*COUPLING:   Se lo stato corrente dell'ingresso non è cambiato rispetto al precedente devo     */
@@ -200,7 +242,7 @@ void loop() {
     {      
       if (actualPinState == HIGH)
       {
-        if (actualTime - lastFallTime >= t0nMax) // se supero il valore massimo ammissibile di TON
+        if (actualTime - lastRiseTime >= tOnMax) // se supero il valore massimo ammissibile di TON
         {
           state = UNCOUPLED; // torno nello stato UNCOUPLED
         } 
@@ -218,10 +260,10 @@ void loop() {
       // se ho avuto un falling edge
       if (actualPinState == LOW)
       {
-       if !(actualTime - lastRiseTime >= tOnMin && actualTime - lastRiseTime <= tOnMax) // se il tempo dall'ultimo rising edge è compreso fra TON_min e TON_max
-       {
+       if (!(actualTime - lastRiseTime >= tOnMin && actualTime - lastRiseTime <= tOnMax)) // se il tempo dall'ultimo rising edge è compreso fra TON_min e TON_max
+      {
         state = UNCOUPLED; // torno nello stato UNCOUPLED perchè ho avuto un TON invalido
-       }
+      }
       }
       // se ho avuto un rising edge
       else if (actualPinState == HIGH)
@@ -230,6 +272,7 @@ void loop() {
         {
           state = COUPLED; // passo nello stato COUPLED
           digitalWrite(OUTPUT_PIN, HIGH); // accendo l'uscita
+          digitalWrite(LED_BUILTIN, LOW);
         }
         else {
           state = UNCOUPLED; // torno nello stato UNCOUPLED perchè ho avuto un TON invalido
@@ -269,6 +312,7 @@ void loop() {
         {
           state = UNCOUPLED; // torno nello stato UNCOUPLED
           digitalWrite(OUTPUT_PIN, LOW); // spengo l'uscita
+          digitalWrite(LED_BUILTIN, LOW);
         }
         
       } else if (actualPinState == LOW)
@@ -277,6 +321,7 @@ void loop() {
         {
           state = UNCOUPLED; // torno nello stato UNCOUPLED
           digitalWrite(OUTPUT_PIN, LOW); // spengo l'uscita
+          digitalWrite(LED_BUILTIN, LOW);
         }
       }
       
@@ -290,6 +335,7 @@ void loop() {
         {
           state = UNCOUPLED; // torno nello stato UNCOUPLED perchè ho avuto un TON invalido
           digitalWrite(OUTPUT_PIN, LOW); // spengo l'uscita
+          digitalWrite(LED_BUILTIN, LOW);
         }
 
       } else if (actualPinState == HIGH) // se ho avuto un rising edge
@@ -301,20 +347,20 @@ void loop() {
         } else {
           //se il tempo dall'ultimo rising edge è compreso fra T_min e T_max
           //passo nello stato COUPLED
-          state = COUPLED; // passo nello stato COUPLED
+          //state = UNCOUPLED; // passo nello stato COUPLED
           digitalWrite(OUTPUT_PIN, HIGH); // accendo l'uscita
+          digitalWrite(LED_BUILTIN, HIGH);
         }
 
         //aggiorno il tempo dell'ultimo rising edge
         lastRiseTime = actualTime;
 
       }
-
-      
     
   }
   
-
+  }
+  delay(10);
   } // end while(1)
 }
 
@@ -411,4 +457,5 @@ static void configure(void) {
   /*Configuriamo il piedino INPUT_PIN come ingresso e il piedino OUTPUT_PIN come uscita*/
   pinMode(INPUT_PIN, INPUT);
   pinMode(OUTPUT_PIN, OUTPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
 }
