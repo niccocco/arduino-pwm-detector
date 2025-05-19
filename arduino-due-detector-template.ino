@@ -149,6 +149,7 @@ void loop() {
 
     if (state == UNCOUPLED)
     {
+      SerialUSB.println("[stato] UNCOUPLED");
       // se lo stato del pin è cambiato, e lo stato attuale è HIGH
       // OVVERO ho avuto un RISING EDGE
       if ((actualPinState != oldPinState) && (actualPinState == HIGH)) 
@@ -191,6 +192,9 @@ void loop() {
   /*            avuto un rising edge, aggiorno il tempo dell'ultimo rising edge                   */
   if (state == COUPLING)
   {
+    SerialUSB.println("[stato] COUPLING");
+    //FIXME: probabilmente va aggiunto un digitalRead per controllare lo stato del pin
+
     // controllo che lo stato del pin non sia cambiato
     if (actualPinState == oldPinState)
     {      
@@ -246,11 +250,70 @@ void loop() {
   /*            falling edge. Sul falling edge devo controllare se il tempo dall'ultimo rising    */
   /*            edge (la larghezza d'impulso) è compreso fra TON_min e TON_max, se non è vero     */
   /*            allora ho avuto un TON invalido, torno nello stato UNCOUPLED e spengo l'uscita.   */
+  
   /*            Se ho un rising edge allora controllo se il tempo dall'ultimo rising edge (il     */
   /*            periodo) è  compreso fra T_min e T_max, se non è vero ho avuto un TON invalido,   */
   /*            torno nello stato UNCOUPLED e spengo l'uscita. Infine, se ho avuto un rising      */
   /*            edge, aggiorno il tempo dell'ultimo rising edge                                   */
+  if (state == COUPLED)
+  {
+    SerialUSB.println("[stato] COUPLED");
+    if (actualPinState == oldPinState)
+    {
+      //lo stato non è cambiato
+      // e è alto
+      if (actualPinState == HIGH)
+      {
+        //controllo di non aver superato il valore massimo di TON
+        if (actualTime - lastFallTime >= tOnMax) // se supero il valore massimo ammissibile di TON
+        {
+          state = UNCOUPLED; // torno nello stato UNCOUPLED
+          digitalWrite(OUTPUT_PIN, LOW); // spengo l'uscita
+        }
+        
+      } else if (actualPinState == LOW)
+      { //essendo basso devo controllare di non aver oltrepassato il periodo T
+        if (actualTime - lastRiseTime >= periodMax) 
+        {
+          state = UNCOUPLED; // torno nello stato UNCOUPLED
+          digitalWrite(OUTPUT_PIN, LOW); // spengo l'uscita
+        }
+      }
+      
+    } else {
+      //lo stato è cambiato, valuto se ho avuto un rising edge o un falling edge
 
+      // se ho avuto un falling edge
+      if (actualPinState == LOW)
+      {
+       if (!(actualTime - lastRiseTime >= tOnMin && actualTime - lastRiseTime <= tOnMax)) // se il tempo dall'ultimo rising edge è compreso fra TON_min e TON_max
+        {
+          state = UNCOUPLED; // torno nello stato UNCOUPLED perchè ho avuto un TON invalido
+          digitalWrite(OUTPUT_PIN, LOW); // spengo l'uscita
+        }
+
+      } else if (actualPinState == HIGH) // se ho avuto un rising edge
+      {
+        if (!(actualTime - lastRiseTime >= periodMin && actualTime - lastRiseTime <= periodMax)) // se il tempo dall'ultimo rising edge è compreso fra T_min e T_max
+        {
+          state = UNCOUPLED; // torno nello stato UNCOUPLED perchè ho avuto un TON invalido
+          digitalWrite(OUTPUT_PIN, LOW); // spengo l'uscita
+        } else {
+          //se il tempo dall'ultimo rising edge è compreso fra T_min e T_max
+          //passo nello stato COUPLED
+          state = COUPLED; // passo nello stato COUPLED
+          digitalWrite(OUTPUT_PIN, HIGH); // accendo l'uscita
+        }
+
+        //aggiorno il tempo dell'ultimo rising edge
+        lastRiseTime = actualTime;
+
+      }
+
+      
+    
+  }
+  
 
   } // end while(1)
 }
